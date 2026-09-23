@@ -1,0 +1,93 @@
+--------------------------------------- LR = 0.05
+bestTest = 0.07304564853
+bestIteration = 746
+
+Shrink model to first 747 iterations.
+              precision    recall  f1-score   support
+
+           0       0.97      0.95      0.96       490
+           1       0.96      0.98      0.97       616
+
+    accuracy                           0.97      1106
+   macro avg       0.97      0.97      0.97      1106
+weighted avg       0.97      0.97      0.97      1106
+ --------------------------
+ 0.9674502712477396
+Training Loss: 0.033213492668453214
+Validation Loss: 0.07328185820061871
+ 
+--------------------------------------- LR = 0.005
+bestTest = 0.0746053841
+bestIteration = 6815
+
+Shrink model to first 6816 iterations.
+              precision    recall  f1-score   support
+
+           0       0.97      0.95      0.96       490
+           1       0.96      0.98      0.97       616
+
+    accuracy                           0.97      1106
+   macro avg       0.97      0.97      0.97      1106
+weighted avg       0.97      0.97      0.97      1106
+ --------------------------
+ 0.9683544303797469
+Training Loss: 0.03662981215220586
+Validation Loss: 0.07464708624957041
+
+--------------------------------------- LR = 0.01 
+bestTest = 0.07428476848
+bestIteration = 3290
+
+Shrink model to first 3291 iterations.
+              precision    recall  f1-score   support
+
+           0       0.98      0.95      0.96       490
+           1       0.96      0.98      0.97       616
+
+    accuracy                           0.97      1106
+   macro avg       0.97      0.97      0.97      1106
+weighted avg       0.97      0.97      0.97      1106
+ --------------------------
+ 0.969258589511754
+Training Loss: 0.03704998949229804
+Validation Loss: 0.07431588121623357
+
+------------------------------------ LR = 0.01 | l2_leaf_reg=4
+bestTest = 0.07535887918
+bestIteration = 3162
+
+Shrink model to first 3163 iterations.
+              precision    recall  f1-score   support
+
+           0       0.98      0.95      0.97       490
+           1       0.96      0.99      0.97       616
+
+    accuracy                           0.97      1106
+   macro avg       0.97      0.97      0.97      1106
+weighted avg       0.97      0.97      0.97      1106
+ --------------------------
+ 0.9701627486437613
+Training Loss: 0.039296687317293924
+Validation Loss: 0.07539164568466458
+
+---------------------------------- LR = 0.01 | l2_leaf_reg=8
+Stopped by overfitting detector  (50 iterations wait)
+
+bestTest = 0.07729191845
+bestIteration = 3909
+
+Shrink model to first 3910 iterations.
+              precision    recall  f1-score   support
+
+           0       0.98      0.96      0.97       490
+           1       0.96      0.98      0.97       616
+
+    accuracy                           0.97      1106
+   macro avg       0.97      0.97      0.97      1106
+weighted avg       0.97      0.97      0.97      1106
+ --------------------------
+ 0.9701627486437613
+Training Loss: 0.03959405908667769
+Validation Loss: 0.0773514831821244
+
+---------------------------------- LR = 0.01 | l2_leaf_reg=6
