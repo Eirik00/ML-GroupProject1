@@ -1,51 +1,44 @@
-from catboost import CatBoostClassifier, Pool
-from sklearn.metrics import accuracy_score, classification_report
+#from catboost import CatBoostClassifier
+from sklearn.ensemble import RandomForestClassifier
+from cv_engine import run_full_pipeline
 
-from datasetloader import load_dataset
+ITERATIONS = 2000
 
-def fitmodel(cbModel):
-    x_training, y_training, x_validation, y_validation, x_testing, y_testing = load_dataset()
+def main():
+    '''param_grid = {
+        "learning_rate": [0.01, 0.05, 0.2],
+        "depth": [4, 6, 8],
+        "subsample": [0.6, 0.8, 1.0]
+    }
 
-    train_data = Pool(data=x_training,   label=y_training)
-    valid_data = Pool(data=x_validation, label=y_validation)
-    test_data  = Pool(data=x_testing,    label=y_testing)
+    static_params = {
+        "iterations": 1500,
+        "random_seed": 42,
+        "verbose": 0
+    }
 
-    model = cbModel
+    results = run_full_pipeline(
+        model_class=CatBoostClassifier,
+        param_grid=param_grid,
+        static_params=static_params
+    )'''
+    param_grid = {
+    }
+    static_params = {
+        "max_depth": None,
+        "max_samples": 1.0,
+        "n_estimators": 1500,
+        "bootstrap": True,
+        "random_state": 42,
+        "n_jobs": 4,
+    }
 
-    model.fit(
-        train_data,
-        eval_set=valid_data,
-        early_stopping_rounds=50,
-        use_best_model=True,
+    results = run_full_pipeline(
+        model_class=RandomForestClassifier,
+        param_grid=param_grid,
+        static_params=static_params
     )
 
-    test_preds = model.predict(test_data)
-    test_probs = model.predict_proba(test_data)
-
-    print(classification_report(y_testing, test_preds),"--------------------------\n",accuracy_score(y_testing, test_preds))
-    evals_result = model.get_evals_result()
-
-    # Access specific metrics
-    train_loss = evals_result["learn"]["Logloss"]
-    val_loss = evals_result["validation"]["Logloss"]
-
-    print(f"Training Loss: {train_loss[-1]}")
-    print(f"Validation Loss: {val_loss[-1]}")
-
-def autoTuner(oIteration, vpTarget):
-    while True:
-
-
-        pass;
 
 if __name__ == "__main__":
-    cbModel = CatBoostClassifier(
-        iterations=1000,
-        learning_rate=0.1,
-        depth=5,
-        eval_metric='Logloss', # research what this does, potential other metrics to use
-        l2_leaf_reg=4,
-        random_seed=42,
-        verbose=True)
-
-    fitmodel(cbModel)
+    main()
