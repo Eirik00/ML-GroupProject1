@@ -1,11 +1,7 @@
-#from catboost import CatBoostClassifier
-from sklearn.ensemble import RandomForestClassifier
+from catboost import CatBoostClassifier
 from cv_engine import run_full_pipeline
-
-ITERATIONS = 2000
-
 def main():
-    '''param_grid = {
+    param_grid = {
         "learning_rate": [0.01, 0.05, 0.2],
         "depth": [4, 6, 8],
         "subsample": [0.6, 0.8, 1.0]
@@ -19,22 +15,6 @@ def main():
 
     results = run_full_pipeline(
         model_class=CatBoostClassifier,
-        param_grid=param_grid,
-        static_params=static_params
-    )'''
-    param_grid = {
-    }
-    static_params = {
-        "max_depth": None,
-        "max_samples": 1.0,
-        "n_estimators": 1500,
-        "bootstrap": True,
-        "random_state": 42,
-        "n_jobs": 4,
-    }
-
-    results = run_full_pipeline(
-        model_class=RandomForestClassifier,
         param_grid=param_grid,
         static_params=static_params
     )

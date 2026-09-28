@@ -1,4 +1,3 @@
-import itertools
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Callable, List, Tuple
@@ -62,7 +61,7 @@ def tune_model(
     if "CatBoost" in model_class.__name__:
         model = model_class(**static_params)
         # CatBoost's native grid search handles parameter combinations automatically
-        grid_res = model.grid_search(param_grid, X=X_train, y=y_train, cv=5, verbose=False, plot=False)
+        grid_res = model.grid_search(param_grid, X=X_train, y=y_train, cv=5, verbose=True, plot=True)
         best_params = {**static_params, **grid_res['params']}
         best_model = model_class(**best_params)
         best_model.fit(X_train, y_train, verbose=False)
@@ -77,7 +76,8 @@ def tune_model(
             param_grid=param_grid,
             cv=5,
             scoring='f1',
-            n_jobs=-1
+            n_jobs=-1,
+            verbose=3
         )
         grid_search.fit(X_train, y_train)
         best_params = {**static_params, **grid_search.best_params_}
