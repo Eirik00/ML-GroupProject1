@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Callable, List, Tuple
+from typing import Dict, Any, List, Tuple
 from scipy.io import arff
-from sklearn.model_selection import StratifiedKFold, train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 def lap_data():
@@ -56,21 +56,22 @@ def tune_model(
     """
     static_params = static_params or {}
     print("\n--- STARTING HYPERPARAMETER TUNING ---")
-
-    # 1. Check if model is CatBoost (uses native grid_search)
+    base_model = model_class(**static_params)
     if "CatBoost" in model_class.__name__:
-        model = model_class(**static_params)
-        # CatBoost's native grid search handles parameter combinations automatically
-        grid_res = model.grid_search(param_grid, X=X_train, y=y_train, cv=5, verbose=True, plot=True)
+        grid_res = base_model.grid_search(
+            param_grid, 
+            X=X_train, 
+            y=y_train, 
+            cv=5, 
+            verbose=True, 
+            plot=False, 
+            stratified=True)
         best_params = {**static_params, **grid_res['params']}
         best_model = model_class(**best_params)
         best_model.fit(X_train, y_train, verbose=False)
         print(f"Best CatBoost Params: {grid_res['params']}")
-        return best_model, best_params
-
-    # 2. Standard GridSearchCV for XGBoost, HistGBM, and Random Forest
+        return best_model, best_params, grid_res
     else:
-        base_model = model_class(**static_params)
         grid_search = GridSearchCV(
             estimator=base_model,
             param_grid=param_grid,
@@ -80,9 +81,10 @@ def tune_model(
             verbose=3
         )
         grid_search.fit(X_train, y_train)
+        
         best_params = {**static_params, **grid_search.best_params_}
         print(f"Best {model_class.__name__} Params: {grid_search.best_params_}")
-        return grid_search.best_estimator_, best_params
+        return grid_search.best_estimator_, best_params, grid_search
 
 def evaluate_robustness(
     model_class: Any,
@@ -175,7 +177,7 @@ def run_full_pipeline(
     X_train, X_test, y_train, y_test = lap_data()
 
     # Step 1: Tune Model
-    best_model, best_params = tune_model(model_class, param_grid, static_params, X_train, y_train)
+    best_model, best_params, gs_model = tune_model(model_class, param_grid, static_params, X_train, y_train)
 
     # Step 2: Baseline Holdout Evaluation
     baseline_metrics = evaluate_test_set(best_model, X_test, y_test)
@@ -198,5 +200,6 @@ def run_full_pipeline(
         "best_params": best_params,
         "baseline_metrics": baseline_metrics,
         "data_size_experiments": df_data_size,
-        "feature_experiments": df_features
+        "feature_experiments": df_features,
+        "gs_model": gs_model,
     }
