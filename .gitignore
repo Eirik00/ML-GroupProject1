@@ -1,3 +1,4 @@
-*/catboost_info/*
-*.ipynb
-*/__pycache__/
+**/catboost_info
+catboost/*.ipynb
+**/__pycache__/
+*.png
