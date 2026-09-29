@@ -3,7 +3,16 @@ import numpy as np
 from typing import Dict, Any, List, Tuple
 from scipy.io import arff
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.inspection import permutation_importance
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
+
+
+
+# Verdi som brukes for aa simulere manglende data.
+# Maa ikke vaere -1, 0 eller 1, siden alle tre er gyldige verdier.
+MISSING_SENTINEL = -2
+
+RANDOM_STATE = 42
 
 def lap_data():
     """Import and preprocess dataset."""
@@ -15,14 +24,19 @@ def lap_data():
             df[col] = df[col].str.decode('utf-8')
 
     df = df.astype(int)
-    df['Result'] = df['Result'].replace(-1, 0) # Convert -1 to 0 for binary classification
+    df['Result'] = (df['Result'] == -1).astype(int)
 
     t_set = df['Result']
     f_set = df.drop('Result', axis=1)
-    
+
+    n_phish = int((t_set == 1).sum())
+    n_legit = int((t_set == 0).sum())
+
     print("==========================================")
     print("Dataset loaded successfully.")
     print(f"Dataset shape: {df.shape} | {len(df)} rows, {len(df.columns)-1} features")
+    print(f"Class 1 = phishing: {n_phish} | Class 0 = legitimate: {n_legit}")
+    print(f"Majority baseline accuracy: {max(n_phish, n_legit) / len(df):.4f}")
     print("==========================================")
 
     X_train, X_test, y_train, y_test = train_test_split(
@@ -36,19 +50,35 @@ def lap_data():
 def evaluate_test_set(model, X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, float]:
     """Helper function to calculate test set metrics."""
     preds = model.predict(X_test)
-    return {
+    tn, fp, fn, tp = confusion_matrix(y_test, preds, labels=[0, 1]).ravel()
+    metrics = {
         "accuracy": accuracy_score(y_test, preds),
         "precision": precision_score(y_test, preds, zero_division=0),
         "recall": recall_score(y_test, preds, zero_division=0),
-        "f1": f1_score(y_test, preds, zero_division=0)
+        "f1": f1_score(y_test, preds, zero_division=0),
+        "missed_phishing": int(fn),
+        "false_alarms": int(fp),
+        "correct_phishing": int(tp),
+        "correct_legitimate": int(tn),
     }
+    if hasattr(model, "predict_proba"):
+        try:
+            proba = model.predict_proba(X_test)[:, 1]
+            metrics["roc_auc"] = roc_auc_score(y_test, proba)
+        except Exception:
+            metrics["roc_auc"] = float("nan")
+    else:
+        metrics["roc_auc"] = float("nan")
+
+    return metrics
 
 def tune_model(
     model_class: Any,
     param_grid: Dict[str, List[Any]],
     static_params: Dict[str, Any] = None,
     X_train: pd.DataFrame = None,
-    y_train: pd.Series = None
+    y_train: pd.Series = None,
+    cat_boost_grid_search: bool = False,
 ) -> Tuple[Any, Dict[str, Any]]:
     """
     Modular tuning function. Uses native grid search for CatBoost
@@ -57,12 +87,12 @@ def tune_model(
     static_params = static_params or {}
     print("\n--- STARTING HYPERPARAMETER TUNING ---")
     base_model = model_class(**static_params)
-    if "CatBoost" in model_class.__name__:
+    if cat_boost_grid_search:
         grid_res = base_model.grid_search(
             param_grid, 
             X=X_train, 
             y=y_train, 
-            cv=5, 
+            cv=3, 
             verbose=True, 
             plot=False, 
             stratified=True)
@@ -75,16 +105,31 @@ def tune_model(
         grid_search = GridSearchCV(
             estimator=base_model,
             param_grid=param_grid,
-            cv=5,
+            cv=3,
             scoring='f1',
-            n_jobs=-1,
-            verbose=3
+            n_jobs=1,
+            verbose=3,
+            return_train_score=True
         )
         grid_search.fit(X_train, y_train)
         
         best_params = {**static_params, **grid_search.best_params_}
         print(f"Best {model_class.__name__} Params: {grid_search.best_params_}")
         return grid_search.best_estimator_, best_params, grid_search
+
+def rank_features(
+        model: Any, 
+        X_test: pd.DataFrame,
+        y_test: pd.Series
+)-> pd.Series:
+    perm = permutation_importance(
+        model, X_test, y_test,
+        scoring="f1",
+        n_repeats=10,
+        random_state=42,
+        n_jobs=-1
+    )
+    return pd.Series(perm.importances_mean, index=X_test.columns).sort_values(ascending=False)
 
 def evaluate_robustness(
     model_class: Any,
@@ -168,7 +213,8 @@ def evaluate_robustness(
 def run_full_pipeline(
     model_class: Any,
     param_grid: Dict[str, List[Any]],
-    static_params: Dict[str, Any] = None
+    static_params: Dict[str, Any] = None,
+    tune_use_cbgs: bool = False
 ):
     """
     All-in-one high level function to load data, tune hyperparameters,
@@ -177,7 +223,7 @@ def run_full_pipeline(
     X_train, X_test, y_train, y_test = lap_data()
 
     # Step 1: Tune Model
-    best_model, best_params, gs_model = tune_model(model_class, param_grid, static_params, X_train, y_train)
+    best_model, best_params, gs_model = tune_model(model_class, param_grid, static_params, X_train, y_train, tune_use_cbgs)
 
     # Step 2: Baseline Holdout Evaluation
     baseline_metrics = evaluate_test_set(best_model, X_test, y_test)
