@@ -1,28 +1,18 @@
-from catboost import CatBoostClassifier
-from cv_engine import run_full_pipeline
+from sklearn.ensemble import HistGradientBoostingClassifier
+import cv_engine as cve
+import pandas as pd
 
-def main():
-    param_grid = {
-        "learning_rate": [0.01, 0.1, 0.6],#list(map(lambda x:(x+5)/100, list(range(0,100,5)))),#
-        "depth": [4, 6, 8],
-        "l2_leaf_reg": [1, 3, 5, 10, 20],
-        "rsm": [0.7, 0.85, 1.0],
-        "subsample": [0.7, 0.85, 1.0],
-        "bootstrap_type":['Bernoulli', 'MVS']
+import numpy as np
+
+hist_param_space = {
+        "learning_rate": ("float", 0.01, 1.0, True), # (type, low, high, log_scale)
+        "max_depth": ("int", 2, 10),                     # (type, low, high)
+        "l2_regularization": ("float", 0.0, 10.0),
+        "max_iter": ("int", 20, 5000, True),
+        "max_features": ("float", 0.0, 1.0)
     }
+params = {
+            "random_state":42,
+        }
 
-    static_params = {
-        "iterations": 2500,
-        "random_seed": 42,
-        "verbose": 0,
-        "early_stopping_rounds": 50,
-    }
-
-    return run_full_pipeline(
-        model_class=CatBoostClassifier,
-        param_grid=param_grid,
-        static_params=static_params
-    )
-
-if __name__ == "__main__":
-    results = main()
+cve.run(HistGradientBoostingClassifier, params, hist_param_space, True, n_jobs=-1, n_trials=10)

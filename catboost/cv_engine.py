@@ -1,18 +1,21 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple
+import optuna
+from optuna.samplers import TPESampler
+from typing import Dict, Any, Tuple, Optional, Type, Callable
 from scipy.io import arff
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.inspection import permutation_importance
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
-
+from sklearn.model_selection import train_test_split, cross_validate, StratifiedKFold
+from sklearn.metrics import (
+    accuracy_score, precision_score, 
+    recall_score, f1_score, 
+    roc_auc_score, fbeta_score)
+from sklearn.feature_selection import mutual_info_classif
+import time
 
 
 # Verdi som brukes for aa simulere manglende data.
 # Maa ikke vaere -1, 0 eller 1, siden alle tre er gyldige verdier.
 MISSING_SENTINEL = -2
-
-RANDOM_STATE = 42
 
 def lap_data():
     """Import and preprocess dataset."""
@@ -47,89 +50,97 @@ def lap_data():
     )
     return X_train, X_test, y_train, y_test
 
-def evaluate_test_set(model, X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, float]:
-    """Helper function to calculate test set metrics."""
-    preds = model.predict(X_test)
-    tn, fp, fn, tp = confusion_matrix(y_test, preds, labels=[0, 1]).ravel()
-    metrics = {
-        "accuracy": accuracy_score(y_test, preds),
-        "precision": precision_score(y_test, preds, zero_division=0),
-        "recall": recall_score(y_test, preds, zero_division=0),
-        "f1": f1_score(y_test, preds, zero_division=0),
-        "missed_phishing": int(fn),
-        "false_alarms": int(fp),
-        "correct_phishing": int(tp),
-        "correct_legitimate": int(tn),
-    }
-    if hasattr(model, "predict_proba"):
-        try:
-            proba = model.predict_proba(X_test)[:, 1]
-            metrics["roc_auc"] = roc_auc_score(y_test, proba)
-        except Exception:
-            metrics["roc_auc"] = float("nan")
-    else:
-        metrics["roc_auc"] = float("nan")
-
-    return metrics
-
 def tune_model(
-    model_class: Any,
-    param_grid: Dict[str, List[Any]],
-    static_params: Dict[str, Any] = None,
-    X_train: pd.DataFrame = None,
-    y_train: pd.Series = None,
-    cat_boost_grid_search: bool = False,
-) -> Tuple[Any, Dict[str, Any]]:
+    model_class: Type[Any],
+    param_space: Dict[str, Tuple[str, Any]],
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    static_params: Optional[Dict[str, Any]] = None,
+    n_trials: int = 50,
+    scoring_func: Callable = f1_score,
+    scoring_kwargs: Optional[Dict[str, Any]] = None,
+    tune_threshold: bool = False,
+    n_jobs: int = 1,
+) -> Tuple[Any, Dict[str, Any], optuna.Study]:
     """
-    Modular tuning function. Uses native grid search for CatBoost
-    and standard GridSearchCV for sklearn/XGBoost models.
+    Modular Optuna hyperparameter tuning function compatible with Sklearn,
+    XGBoost, LightGBM, and CatBoost models.
+
+    Parameters:
+    -----------
+    param_space : Dict where key is hyperparameter name and value is a tuple:
+        - ("int", low, high) or ("int", low, high, log_bool)
+        - ("float", low, high) or ("float", low, high, log_bool)
+        - ("categorical", [list_of_options])
+    tune_threshold : bool
+        If True, optimizes the classification threshold alongside hyperparameters.
     """
     static_params = static_params or {}
     print("\n--- STARTING HYPERPARAMETER TUNING ---")
-    base_model = model_class(**static_params)
-    if cat_boost_grid_search:
-        grid_res = base_model.grid_search(
-            param_grid, 
-            X=X_train, 
-            y=y_train, 
-            cv=3, 
-            verbose=True, 
-            plot=False, 
-            stratified=True)
-        best_params = {**static_params, **grid_res['params']}
-        best_model = model_class(**best_params)
-        best_model.fit(X_train, y_train, verbose=False)
-        print(f"Best CatBoost Params: {grid_res['params']}")
-        return best_model, best_params, grid_res
-    else:
-        grid_search = GridSearchCV(
-            estimator=base_model,
-            param_grid=param_grid,
-            cv=3,
-            scoring='f1',
-            n_jobs=1,
-            verbose=3,
-            return_train_score=True
-        )
-        grid_search.fit(X_train, y_train)
-        
-        best_params = {**static_params, **grid_search.best_params_}
-        print(f"Best {model_class.__name__} Params: {grid_search.best_params_}")
-        return grid_search.best_estimator_, best_params, grid_search
 
-def rank_features(
-        model: Any, 
-        X_test: pd.DataFrame,
-        y_test: pd.Series
-)-> pd.Series:
-    perm = permutation_importance(
-        model, X_test, y_test,
-        scoring="f1",
-        n_repeats=10,
-        random_state=42,
-        n_jobs=-1
-    )
-    return pd.Series(perm.importances_mean, index=X_test.columns).sort_values(ascending=False)
+    static_params = static_params or {}
+    scoring_kwargs = scoring_kwargs or {}
+    print(f"\n=================\n{model_class.__name__}\n===============")
+
+    trainF, valF, trainT, valT = train_test_split(X_train, y_train, test_size=0.2, random_state=42, stratify=y_train)
+    model = ()
+
+    def objective(trial: optuna.Trial)->float:
+        suggested_params={}
+        for param_name, spec in param_space.items():
+            param_type = spec[0]
+
+            if param_type == "int":
+                low, high = spec[1], spec[2]
+                log = spec[3] if len(spec) > 3 else False
+                suggested_params[param_name] = trial.suggest_int(param_name, low, high, log=log)
+
+            elif param_type == "float":
+                low, high = spec[1], spec[2]
+                log = spec[3] if len(spec) > 3 else False
+                suggested_params[param_name] = trial.suggest_float(param_name, low, high, log=log)
+
+            elif param_type == "categorical":
+                choices = spec[1]
+                suggested_params[param_name] = trial.suggest_categorical(param_name, choices)
+
+        current_params = {**static_params, **suggested_params}
+        threshold = trial.suggest_float("threshold", 0.01, 0.50) if tune_threshold else 0.5
+
+        model = model_class(**current_params)
+        model.fit(trainF, trainT)
+
+        if hasattr(model, "predict_proba"):
+            y_probs = model.predict_proba(valF)[:, 1]
+            y_pred = (y_probs >= threshold).astype(int)
+        else:
+            y_pred = model.prediction(valF)
+
+        score = scoring_func(valT, y_pred, **scoring_kwargs)
+        return score
+
+    #optuna.logging.set_verbosity(optuna.logging.WARNING)
+    sampler = TPESampler(seed=42)
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+    study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs)
+
+    best_params = {**static_params, **study.best_params}
+    best_threshold = best_params.pop("threshold", None)
+
+    print(f"\n--- OPTUNA TUNING COMPLETE ({model_class.__name__}) ---")
+    print(f"Best score: {study.best_value:.4f}")
+    print(f"Best params:{best_params}")
+    print(f"Best threshold:{best_threshold}")
+    print("----------------------------------------------------------")
+
+    return best_params, study
+
+    
+
+def feature_selection(X_train, y_train): # Source = https://karyailham.com.my/index.php/arca/article/view/1119/1257
+    score = mutual_info_classif(X_train, y_train, discrete_features=True, random_state=42, n_jobs=2)
+    result = pd.DataFrame({"X_train": X_train.columns, "mutual_info": score}).sort_values(["mutual_info", "X_train"], ascending=[False, True]).reset_index(drop=True)
+    return list(result["X_train"])
 
 def evaluate_robustness(
     model_class: Any,
@@ -138,8 +149,6 @@ def evaluate_robustness(
     y_train: pd.Series,
     X_test: pd.DataFrame,
     y_test: pd.Series,
-    data_fractions: List[float] = [1.0, 0.5, 0.25],
-    feature_counts: List[int] = [None, 15, 5]
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Tests model sensitivity/robustness against:
@@ -150,102 +159,151 @@ def evaluate_robustness(
     print("RUNNING ROBUSTNESS & SENSITIVITY TESTS")
     print("==========================================")
 
+    model = model_class(**best_params)
+
     # --- EXPERIMENT A: LESS TRAINING DATA ---
     print("\n[Test A] Evaluating sensitivity to reduced training data...")
-    data_size_results = []
+    data_size_results = {}
+    data_fractions = [0.5, 0.25, 0.05]
     
     for frac in data_fractions:
         if frac == 1.0:
             X_tr_sub, y_tr_sub = X_train, y_train
         else:
-            X_tr_sub, _, y_tr_sub, _ = train_test_split(
+            _, X_tr_sub, _, y_tr_sub = train_test_split(
                 X_train, y_train, train_size=frac, random_state=42, stratify=y_train
             )
 
-        model = model_class(**best_params)
         model.fit(X_tr_sub, y_tr_sub)
-        metrics = evaluate_test_set(model, X_test, y_test)
-        
-        data_size_results.append({
-            "Train_Data_Pct": f"{int(frac*100)}%",
-            "Train_Rows": len(X_tr_sub),
-            **metrics
-        })
+        scores = model.predict_proba(X_test)[:, 1]
+        pred = (scores >= 0.5).astype(int)
+        i=int(frac*100)
+        data_size_results[i] = {"accuracy": accuracy_score(y_test, pred),
+                    "recall": recall_score(y_test, pred, zero_division=0),
+                    "precision": precision_score(y_test, pred, zero_division=0),
+                    "roc_auc": roc_auc_score(y_test, pred),
+                    "f1": f1_score(y_test, pred, zero_division=0)}
 
-    df_data_size = pd.DataFrame(data_size_results)
+    df_data_size = pd.DataFrame.from_dict(data_size_results, orient="index")
 
     # --- EXPERIMENT B: FEWER FEATURES ---
-    print("\n[Test B] Evaluating sensitivity to missing attributes/features...")
-    
-    # Fit baseline model on full features to extract feature importances
-    base_model = model_class(**best_params)
-    base_model.fit(X_train, y_train)
-    
-    if hasattr(base_model, "feature_importances_"):
-        importances = base_model.feature_importances_
-        sorted_indices = np.argsort(importances)[::-1]
-        sorted_features = X_train.columns[sorted_indices].tolist()
-    else:
-        sorted_features = X_train.columns.tolist()
+    print("\n[Test B] Evaluating missing values...")
+    model.fit(X_train, y_train)
 
-    feature_results = []
-    for num_feats in feature_counts:
-        selected_cols = sorted_features[:num_feats] if num_feats else X_train.columns.tolist()
-        feat_label = f"Top {num_feats}" if num_feats else "All Features"
+    missing_res = {}
+    missing_fracts = [0.0, 0.1, 0.3, 0.5, 0.8]
+    for frac in missing_fracts:
+        X_corrupt = X_test.copy()
+        np.random.seed(42)
+        mask = np.random.rand(*X_corrupt.shape)<frac
+        X_corrupt[mask] = np.nan
 
-        X_tr_feat = X_train[selected_cols]
-        X_te_feat = X_test[selected_cols]
+        scores = model.predict_proba(X_corrupt)[:, 1]
+        pred = (scores >= 0.5).astype(int)
+        i=int(frac*100)
+        missing_res[i] = {"accuracy": accuracy_score(y_test, pred),
+                    "recall": recall_score(y_test, pred, zero_division=0),
+                    "precision": precision_score(y_test, pred, zero_division=0),
+                    "roc_auc": roc_auc_score(y_test, pred),
+                    "f1": f1_score(y_test, pred, zero_division=0)}
 
-        model = model_class(**best_params)
-        model.fit(X_tr_feat, y_train)
-        metrics = evaluate_test_set(model, X_te_feat, y_test)
+    df_missing = pd.DataFrame.from_dict(missing_res, orient="index")
 
-        feature_results.append({
-            "Feature_Subset": feat_label,
-            "Num_Features": len(selected_cols),
-            **metrics
-        })
+    return df_data_size, df_missing
 
-    df_features = pd.DataFrame(feature_results)
-
-    return df_data_size, df_features
-
-def run_full_pipeline(
-    model_class: Any,
-    param_grid: Dict[str, List[Any]],
-    static_params: Dict[str, Any] = None,
-    tune_use_cbgs: bool = False
-):
+def run(
+    model_class: Type[Any],
+    model_params: Dict[str, Any],
+    param_space: Dict[str, Tuple[str, Any]] = None,
+    tune_model_bool: bool = False,
+    n_jobs: int=1,
+    n_trials: int=20,
+)-> pd.DataFrame:
     """
     All-in-one high level function to load data, tune hyperparameters,
     evaluate holdout performance, and run robustness experiments.
     """
     X_train, X_test, y_train, y_test = lap_data()
 
-    # Step 1: Tune Model
-    best_model, best_params, gs_model = tune_model(model_class, param_grid, static_params, X_train, y_train, tune_use_cbgs)
+    metrics = {
+        "accuracy": "accuracy",
+        "recall": "precision",
+        "precision": "precision",
+        "roc_auc": "roc_auc",
+        "f1": "f1",
+    }
 
-    # Step 2: Baseline Holdout Evaluation
-    baseline_metrics = evaluate_test_set(best_model, X_test, y_test)
-    print("\n--- BASELINE HOLDOUT TEST METRICS ---")
-    for metric, score in baseline_metrics.items():
-        print(f"Test {metric.capitalize()}: {score:.4f}")
+    dataFolds = StratifiedKFold(n_splits=3, random_state=42, shuffle=True)
+
+    if (tune_model_bool and param_space is not None):
+        model_params, _ = tune_model(
+            model_class=model_class,
+            param_space=param_space,
+            X_train=X_train,
+            y_train=y_train,
+            static_params=model_params,
+            n_trials=n_trials,
+            scoring_func=fbeta_score,
+            scoring_kwargs={"beta": 2},
+            tune_threshold=True,
+            n_jobs=n_jobs,
+        )
+    else:
+        print("NEITHER TUNING ENABLED NOR PARAM_SPACE GIVEN")
+        return        
+
+
+    model = model_class(**model_params)
+    total_res = {}
+    strtTm = time.time()
+    print(f"\n Model[{model_class.__name__}] starting training \n============================================")
+    cv_results = cross_validate(model, X_train, 
+                                y_train, cv=dataFolds, scoring=metrics, 
+                                n_jobs=1, return_train_score=False)
+    model.fit(X_train, y_train)
+    scores = model.predict_proba(X_test)[:, 1]
+    pred = (scores >= 0.5).astype(int)
+    test_run = {"accuracy": accuracy_score(y_test, pred),
+                "recall": recall_score(y_test, pred, zero_division=0),
+                "precision": precision_score(y_test, pred, zero_division=0),
+                "roc_auc": roc_auc_score(y_test, pred),
+                "f1": f1_score(y_test, pred, zero_division=0)}
+    flme = lambda a, b:float(np.mean([np.mean(a),np.mean(b)]))
 
     # Step 3: Robustness & Sensitivity Tests
-    df_data_size, df_features = evaluate_robustness(
-        model_class, best_params, X_train, y_train, X_test, y_test
+    df_data_size, df_missing = evaluate_robustness(
+        model_class, model_params, X_train, y_train, X_test, y_test
     )
-
-    print("\n--- DATA REDUCTION RESULTS ---")
-    print(df_data_size.to_string(index=False))
-
-    print("\n--- FEATURE SHORTENING RESULTS ---")
-    print(df_features.to_string(index=False))
-
-    return {
-        "best_params": best_params,
-        "baseline_metrics": baseline_metrics,
-        "data_size_experiments": df_data_size,
-        "feature_experiments": df_features,
-        "gs_model": gs_model,
+    endTm = time.time() - strtTm
+    print(f"\n Model[{model_class.__name__}] trained after {endTm}s\n============================================")
+    
+    total_res = {
+        "Accuracy": flme(cv_results['test_accuracy'],test_run['accuracy']),
+        "Recall": flme(cv_results['test_recall'],test_run["recall"]),
+        "Precision": flme(cv_results['test_precision'],test_run["precision"]),
+        "ROC-AUC": flme(cv_results['test_roc_auc'],test_run["roc_auc"]),
+        "CV-F1": float(np.mean(cv_results['test_f1'])),
+        "Test-F1": float(np.mean(test_run['f1'])),
     }
+
+    df_results = pd.DataFrame([total_res])
+
+    print("\n----------------- Results ----------------")
+    print(df_results.round(3).to_string(index=False))
+    print("\n------------------------------------------")
+    print("\n------- Missing Data Sensitivity ---------")
+    print(df_data_size.round(3).to_string())
+    print("\n------------------------------------------")
+    print("\n------- Missing values Sensitivity -------")
+    print(df_missing.round(3).to_string())
+    
+    total_res = {**total_res,
+        "data_size_experiments": df_data_size,
+        "missing_values_experiments": df_missing,
+    }
+
+
+    endTm = time.time() - strtTm
+    print(f"\n Experiments finished after {endTm}s\n============================================")
+
+    return total_res
