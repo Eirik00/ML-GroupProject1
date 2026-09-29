@@ -1,0 +1,1 @@
+{'verbose': 0, 'random_seed': 42, 'learning_rate': 0.14558058393198778, 'depth': 5, 'l2_leaf_reg': 2.7181159851524557, 'iterations': 1060}
