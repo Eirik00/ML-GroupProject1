@@ -12,11 +12,6 @@ from sklearn.metrics import (
 from sklearn.feature_selection import mutual_info_classif
 import time
 
-
-# Verdi som brukes for aa simulere manglende data.
-# Maa ikke vaere -1, 0 eller 1, siden alle tre er gyldige verdier.
-MISSING_SENTINEL = -2
-
 def lap_data():
     """Import and preprocess dataset."""
     data, meta = arff.loadarff('datasets/Training Dataset.arff')
