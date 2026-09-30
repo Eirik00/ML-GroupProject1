@@ -243,9 +243,8 @@ def run(
             y_train=y_train,
             static_params=model_params,
             n_trials=n_trials,
-            scoring_func=fbeta_score,
-            scoring_kwargs={"beta": 2},
-            tune_threshold=True,
+            scoring_func=roc_auc_score,
+            tune_threshold=False,
             n_jobs=n_jobs,
         )
     else:
