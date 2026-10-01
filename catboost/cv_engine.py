@@ -7,11 +7,13 @@ from scipy.io import arff
 from sklearn.model_selection import train_test_split, cross_validate, StratifiedKFold
 from sklearn.metrics import (
     accuracy_score, precision_score, 
-    recall_score, f1_score, 
-    roc_auc_score, fbeta_score)
+    recall_score, fbeta_score, 
+    f1_score, roc_auc_score)
 from sklearn.feature_selection import mutual_info_classif
 import time
 
+
+# Data loading function
 def lap_data():
     """Import and preprocess dataset."""
     data, meta = arff.loadarff('datasets/Training Dataset.arff')
@@ -45,6 +47,7 @@ def lap_data():
     )
     return X_train, X_test, y_train, y_test
 
+# Tuner function
 def tune_model(
     model_class: Type[Any],
     param_space: Dict[str, Tuple[str, Any]],
@@ -77,8 +80,7 @@ def tune_model(
     scoring_kwargs = scoring_kwargs or {}
     print(f"\n=================\n{model_class.__name__}\n===============")
 
-    trainF, valF, trainT, valT = train_test_split(X_train, y_train, test_size=0.2, random_state=42, stratify=y_train)
-    model = ()
+    trainF, valF, trainT, valT = lap_data() # Tune hyperparameters on the full data set
 
     def objective(trial: optuna.Trial)->float:
         suggested_params={}
@@ -130,13 +132,6 @@ def tune_model(
 
     return best_params, study
 
-    
-
-def feature_selection(X_train, y_train): # Source = https://karyailham.com.my/index.php/arca/article/view/1119/1257
-    score = mutual_info_classif(X_train, y_train, discrete_features=True, random_state=42, n_jobs=2)
-    result = pd.DataFrame({"X_train": X_train.columns, "mutual_info": score}).sort_values(["mutual_info", "X_train"], ascending=[False, True]).reset_index(drop=True)
-    return list(result["X_train"])
-
 def evaluate_robustness(
     model_class: Any,
     best_params: Dict[str, Any],
@@ -166,7 +161,7 @@ def evaluate_robustness(
             X_tr_sub, y_tr_sub = X_train, y_train
         else:
             _, X_tr_sub, _, y_tr_sub = train_test_split(
-                X_train, y_train, train_size=frac, random_state=42, stratify=y_train
+                X_train, y_train, test_size=frac, random_state=42, stratify=y_train
             )
 
         model.fit(X_tr_sub, y_tr_sub)
@@ -181,7 +176,7 @@ def evaluate_robustness(
 
     df_data_size = pd.DataFrame.from_dict(data_size_results, orient="index")
 
-    # --- EXPERIMENT B: FEWER FEATURES ---
+    # --- EXPERIMENT B: MISSING VALUES ---
     print("\n[Test B] Evaluating missing values...")
     model.fit(X_train, y_train)
 
@@ -222,7 +217,7 @@ def run(
 
     metrics = {
         "accuracy": "accuracy",
-        "recall": "precision",
+        "recall": "recall",
         "precision": "precision",
         "roc_auc": "roc_auc",
         "f1": "f1",
@@ -230,22 +225,21 @@ def run(
 
     dataFolds = StratifiedKFold(n_splits=3, random_state=42, shuffle=True)
 
-    if (tune_model_bool and param_space is not None):
-        model_params, _ = tune_model(
-            model_class=model_class,
-            param_space=param_space,
-            X_train=X_train,
-            y_train=y_train,
-            static_params=model_params,
-            n_trials=n_trials,
-            scoring_func=roc_auc_score,
-            tune_threshold=False,
-            n_jobs=n_jobs,
-        )
-    else:
-        print("NEITHER TUNING ENABLED NOR PARAM_SPACE GIVEN")
-        return        
-
+    if (tune_model_bool is True):
+        if (param_space is not None):
+            model_params, _ = tune_model(
+                model_class=model_class,
+                param_space=param_space,
+                X_train=X_train,
+                y_train=y_train,
+                static_params=model_params,
+                n_trials=n_trials,
+                scoring_func=roc_auc_score,
+                n_jobs=n_jobs,
+            )
+        else:
+            print("NEITHER TUNING ENABLED NOR PARAM_SPACE GIVEN")
+            return
 
     model = model_class(**model_params)
     total_res = {}
@@ -254,30 +248,39 @@ def run(
     cv_results = cross_validate(model, X_train, 
                                 y_train, cv=dataFolds, scoring=metrics, 
                                 n_jobs=1, return_train_score=False)
+    
     model.fit(X_train, y_train)
+
     scores = model.predict_proba(X_test)[:, 1]
     pred = (scores >= 0.5).astype(int)
+
     test_run = {"accuracy": accuracy_score(y_test, pred),
                 "recall": recall_score(y_test, pred, zero_division=0),
                 "precision": precision_score(y_test, pred, zero_division=0),
                 "roc_auc": roc_auc_score(y_test, pred),
                 "f1": f1_score(y_test, pred, zero_division=0)}
-    flme = lambda a, b:float(np.mean([np.mean(a),np.mean(b)]))
+    
+    flme = lambda a:float(np.mean(a))
 
     # Step 3: Robustness & Sensitivity Tests
     df_data_size, df_missing = evaluate_robustness(
         model_class, model_params, X_train, y_train, X_test, y_test
     )
+
     endTm = time.time() - strtTm
     print(f"\n Model[{model_class.__name__}] trained after {endTm}s\n============================================")
     
     total_res = {
-        "Accuracy": flme(cv_results['test_accuracy'],test_run['accuracy']),
-        "Recall": flme(cv_results['test_recall'],test_run["recall"]),
-        "Precision": flme(cv_results['test_precision'],test_run["precision"]),
-        "ROC-AUC": flme(cv_results['test_roc_auc'],test_run["roc_auc"]),
-        "CV-F1": float(np.mean(cv_results['test_f1'])),
-        "Test-F1": float(np.mean(test_run['f1'])),
+        "CV Accuracy": flme(cv_results['test_accuracy']),
+        "CV Recall": flme(cv_results['test_recall']),
+        "CV Precision": flme(cv_results['test_precision']),
+        "CV ROC-AUC": flme(cv_results['test_roc_auc']),
+        "CV F1": float(np.mean(cv_results['test_f1'])),
+        "Test Accuracy": flme(test_run['accuracy']),
+        "Test Recall": flme(test_run["recall"]),
+        "Test Precision": flme(test_run["precision"]),
+        "Test ROC-AUC": flme(test_run["roc_auc"]),
+        "Test F1": float(np.mean(test_run['f1'])),
     }
 
     df_results = pd.DataFrame([total_res])
@@ -292,8 +295,8 @@ def run(
     print(df_missing.round(3).to_string())
     
     total_res = {**total_res,
-        "data_size_experiments": df_data_size,
-        "missing_values_experiments": df_missing,
+        "data_size_experiments": df_data_size.to_dict(),
+        "missing_values_experiments": df_missing.to_dict(),
     }
 
 
